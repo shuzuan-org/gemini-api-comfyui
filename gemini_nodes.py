@@ -294,6 +294,14 @@ class GeminiImagePro(io.ComfyNode):
         ratio_hint = _aspect_ratio_hint(aspect_ratio, images)
         prompt_text = f"{prompt}\nAspect ratio: {ratio_hint}" if ratio_hint else prompt
         parts = [prompt_text]
+        image_config = None
+        image_config_args: dict[str, str] = {}
+        if ratio_hint:
+            image_config_args["aspect_ratio"] = ratio_hint
+        if resolution:
+            image_config_args["image_size"] = resolution
+        if image_config_args:
+            image_config = genai.types.ImageConfig(**image_config_args)
         if images is not None:
             png_bytes = _tensor_to_png_bytes(images)
             parts.append(
@@ -309,6 +317,7 @@ class GeminiImagePro(io.ComfyNode):
                 config=genai.types.GenerateContentConfig(
                     seed=seed_value,
                     system_instruction=SYSTEM_PROMPT,
+                    image_config=image_config,
                     response_modalities=["TEXT", "IMAGE"] if response_modalities != "IMAGE" else ["IMAGE"],
                 ),
             )
