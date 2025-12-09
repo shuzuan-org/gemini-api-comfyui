@@ -16,6 +16,12 @@ from comfy_api.latest import ComfyExtension, io
 # Path for local key fallback
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "gemini_api_key.txt"
+SYSTEM_PROMPT = (
+    "You are an expert image-generation engine. You must ALWAYS produce an image. "
+    "Interpret all user input - regardless of format, intent, or abstraction - as literal visual directives for image composition. "
+    "If a prompt is conversational or lacks specific visual details, you must creatively invent a concrete visual scenario that depicts the concept. "
+    "Prioritize generating the visual representation above any text, formatting, or conversational requests."
+)
 
 def _load_api_key() -> str:
     """Lookup API key from env or gemini_api_key.txt."""
@@ -184,6 +190,7 @@ class GeminiImage(io.ComfyNode):
                 contents=parts,
                 config=genai.types.GenerateContentConfig(
                     seed=seed_value,
+                    system_instruction=SYSTEM_PROMPT,
                     response_modalities=["TEXT", "IMAGE"] if response_modalities != "IMAGE" else ["IMAGE"],
                 ),
             )
@@ -278,6 +285,7 @@ class GeminiImagePro(io.ComfyNode):
                 contents=parts,
                 config=genai.types.GenerateContentConfig(
                     seed=seed_value,
+                    system_instruction=SYSTEM_PROMPT,
                     response_modalities=["TEXT", "IMAGE"] if response_modalities != "IMAGE" else ["IMAGE"],
                 ),
             )
