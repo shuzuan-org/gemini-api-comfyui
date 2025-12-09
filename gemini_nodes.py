@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 from io import BytesIO
 from pathlib import Path
 from typing import List
@@ -80,6 +81,24 @@ def _response_parts_to_tensors_and_text(response) -> tuple[torch.Tensor, str]:
     if not images:
         raise RuntimeError("Gemini API returned no images.")
     return torch.stack(images, dim=0), "\n".join(texts)
+
+
+def _aspect_ratio_hint(aspect_ratio: str | None, images: torch.Tensor | None) -> str | None:
+    """Derive an aspect ratio hint string to append to the prompt."""
+    if aspect_ratio and aspect_ratio != "auto":
+        return aspect_ratio
+    if images is None:
+        return None
+    image = images[0] if images.dim() == 4 else images
+    if image.dim() != 3:
+        return None
+    height, width = int(image.shape[0]), int(image.shape[1])
+    if height <= 0 or width <= 0:
+        return None
+    divisor = math.gcd(width, height)
+    if divisor == 0:
+        return None
+    return f"{width // divisor}:{height // divisor}"
 
 
 class _GeminiClientSingleton:
@@ -173,7 +192,9 @@ class GeminiImage(io.ComfyNode):
     ) -> io.NodeOutput:
         response_modalities = response_modalities or "IMAGE+TEXT"
         client = _GeminiClientSingleton.get()
-        parts = [prompt]
+        ratio_hint = _aspect_ratio_hint(aspect_ratio, images)
+        prompt_text = f"{prompt}\nAspect ratio: {ratio_hint}" if ratio_hint else prompt
+        parts = [prompt_text]
         seed_value = None if seed is None or seed < 0 else min(int(seed), 0x7FFFFFFF)
         if images is not None:
             png_bytes = _tensor_to_png_bytes(images)
@@ -183,7 +204,7 @@ class GeminiImage(io.ComfyNode):
                     mime_type="image/png",
                 )
             )
-        # aspect_ratio is currently not passed because public API handles sizing internally.
+        # aspect_ratio is hinted in the prompt; no direct API parameter is available.
         try:
             response = client.models.generate_content(
                 model=model,
@@ -270,7 +291,9 @@ class GeminiImagePro(io.ComfyNode):
         response_modalities = response_modalities or "IMAGE+TEXT"
         client = _GeminiClientSingleton.get()
         seed_value = None if seed is None or seed < 0 else min(int(seed), 0x7FFFFFFF)
-        parts = [prompt]
+        ratio_hint = _aspect_ratio_hint(aspect_ratio, images)
+        prompt_text = f"{prompt}\nAspect ratio: {ratio_hint}" if ratio_hint else prompt
+        parts = [prompt_text]
         if images is not None:
             png_bytes = _tensor_to_png_bytes(images)
             parts.append(
