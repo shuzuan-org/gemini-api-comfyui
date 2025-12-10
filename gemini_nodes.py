@@ -84,9 +84,15 @@ def _response_parts_to_tensors_and_text(response) -> tuple[torch.Tensor, str]:
 
 
 def _aspect_ratio_hint(aspect_ratio: str | None, images: torch.Tensor | None) -> str | None:
-    """Derive an aspect ratio hint string to append to the prompt."""
+    """Return only a supported aspect ratio; fall back to the closest allowed option."""
+    allowed = [ratio for ratio in ASPECT_RATIOS if ratio != "auto"]
+
+    def _ratio_to_float(ratio: str) -> float:
+        a, b = ratio.split(":")
+        return float(a) / float(b)
+
     if aspect_ratio and aspect_ratio != "auto":
-        return aspect_ratio
+        return aspect_ratio if aspect_ratio in allowed else None
     if images is None:
         return None
     image = images[0] if images.dim() == 4 else images
@@ -98,7 +104,13 @@ def _aspect_ratio_hint(aspect_ratio: str | None, images: torch.Tensor | None) ->
     divisor = math.gcd(width, height)
     if divisor == 0:
         return None
-    return f"{width // divisor}:{height // divisor}"
+    simplified = f"{width // divisor}:{height // divisor}"
+    if simplified in allowed:
+        return simplified
+    # Gemini only accepts a fixed set of aspect ratios. Choose the closest valid one.
+    target_ratio = width / height
+    closest = min(allowed, key=lambda ratio: abs(_ratio_to_float(ratio) - target_ratio))
+    return closest
 
 
 class _GeminiClientSingleton:
