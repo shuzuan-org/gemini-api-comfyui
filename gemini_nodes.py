@@ -131,7 +131,8 @@ def _load_api_key() -> str:
 
 
 def _tensor_to_png_bytes(image: torch.Tensor) -> bytes:
-    """Convert a ComfyUI image tensor [H,W,C] or [B,H,W,C] to PNG bytes."""
+    """Convert a ComfyUI image tensor [H,W,C] or [B,H,W,C] to PNG bytes.
+    如果是批次输入（4维），只返回第一张图片的PNG bytes（用于向后兼容）。"""
     buffer = None
     pil_image = None
     try:
@@ -152,6 +153,44 @@ def _tensor_to_png_bytes(image: torch.Tensor) -> bytes:
             buffer.close()
         if pil_image:
             pil_image.close()
+
+
+def _tensor_to_png_bytes_list(images: torch.Tensor) -> List[bytes]:
+    """Convert a ComfyUI image tensor [H,W,C] or [B,H,W,C] to a list of PNG bytes.
+    支持多张图片输入，返回所有图片的PNG bytes列表。"""
+    png_bytes_list: List[bytes] = []
+    
+    # 处理单张图片（3维）或批次图片（4维）
+    if images.dim() == 3:
+        # 单张图片，添加批次维度
+        images = images.unsqueeze(0)
+    elif images.dim() != 4:
+        raise ValueError(f"不支持的图像张量维度: {images.dim()}，期望3或4维")
+    
+    # 遍历批次中的每张图片
+    batch_size = images.shape[0]
+    for i in range(batch_size):
+        image = images[i]
+        buffer = None
+        pil_image = None
+        try:
+            np_img = np.clip(image.detach().cpu().numpy() * 255.0, 0, 255).astype(np.uint8)
+            if np_img.ndim == 2:
+                np_img = np.stack([np_img] * 3, axis=-1)
+            if np_img.shape[-1] == 1:
+                np_img = np.repeat(np_img, 3, axis=-1)
+            pil_image = PILImage.fromarray(np_img)
+            buffer = BytesIO()
+            pil_image.save(buffer, format="PNG")
+            png_bytes_list.append(buffer.getvalue())
+        finally:
+            # 确保资源被释放
+            if buffer:
+                buffer.close()
+            if pil_image:
+                pil_image.close()
+    
+    return png_bytes_list
 
 
 def _generated_images_to_tensor(images) -> torch.Tensor:
@@ -413,13 +452,15 @@ class GeminiImage(io.ComfyNode):
         parts = [prompt_text]
         seed_value = None if seed is None or seed < 0 else min(int(seed), 0x7FFFFFFF)
         if images is not None:
-            png_bytes = _tensor_to_png_bytes(images)
-            parts.append(
-                genai.types.Part.from_bytes(
-                    data=png_bytes,
-                    mime_type="image/png",
+            # 支持多张图片输入
+            png_bytes_list = _tensor_to_png_bytes_list(images)
+            for png_bytes in png_bytes_list:
+                parts.append(
+                    genai.types.Part.from_bytes(
+                        data=png_bytes,
+                        mime_type="image/png",
+                    )
                 )
-            )
         # aspect_ratio is hinted in the prompt; no direct API parameter is available.
         response = _call_gemini_api_with_retry(
             client=client,
@@ -517,13 +558,15 @@ class GeminiImagePro(io.ComfyNode):
         if image_config_args:
             image_config = genai.types.ImageConfig(**image_config_args)
         if images is not None:
-            png_bytes = _tensor_to_png_bytes(images)
-            parts.append(
-                genai.types.Part.from_bytes(
-                    data=png_bytes,
-                    mime_type="image/png",
+            # 支持多张图片输入
+            png_bytes_list = _tensor_to_png_bytes_list(images)
+            for png_bytes in png_bytes_list:
+                parts.append(
+                    genai.types.Part.from_bytes(
+                        data=png_bytes,
+                        mime_type="image/png",
+                    )
                 )
-            )
         response = _call_gemini_api_with_retry(
             client=client,
             model=model,
