@@ -726,7 +726,7 @@ class GeminiImageProxy(io.ComfyNode):
         image_size: str,
         response_modalities: str,
         auto_fallback: bool,
-        images: torch.Tensor | None,
+        images: torch.Tensor | None = None,
     ) -> io.NodeOutput:
         api_key = _load_proxy_api_key()
         model = (model or "gemini-3-pro-image-preview").strip()
