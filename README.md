@@ -9,16 +9,22 @@ pip install -r custom_nodes/gemini-api-comfyui/requirements.txt
 ```
 
 ## 认证方式
-- API Key：设置环境变量 `GEMINI_API_KEY=你的key`，或在 `custom_nodes/gemini-api-comfyui/` 下创建 `gemini_api_key.txt`，文件只写一行 key。
-- Vertex（可选）：设置 `GEMINI_VERTEX_PROJECT=<项目ID>`（或 `GOOGLE_CLOUD_PROJECT`），可选 `GEMINI_VERTEX_LOCATION`（默认 `us-central1`），以及 `GOOGLE_APPLICATION_CREDENTIALS` 指向具备 Vertex 权限的 service account JSON。有项目 ID 时将使用 Vertex 模式，否则走 API Key 模式。
+
+### 官方 Gemini 节点（Nano Banana / Pro）
+- **API Key**：设置环境变量 `GEMINI_API_KEY=你的key`，或在 `custom_nodes/gemini-api-comfyui/` 下创建 `gemini_api_key.txt`，文件只写一行 key。
+- **Vertex（可选）**：设置 `GEMINI_VERTEX_PROJECT=<项目ID>`（或 `GOOGLE_CLOUD_PROJECT`），可选 `GEMINI_VERTEX_LOCATION`（默认 `us-central1`），以及 `GOOGLE_APPLICATION_CREDENTIALS` 指向具备 Vertex 权限的 service account JSON。有项目 ID 时将使用 Vertex 模式，否则走 API Key 模式。
+
+### 代理节点（Gemini Image Proxy）
+- **代理 API Key**（与上述 `GEMINI_API_KEY` **不是同一个**）：设置环境变量 `GEMINI_PROXY_API_KEY=你的代理key`，或在同目录下创建 `gemini_proxy_api_key.txt`，文件只写一行 key。仅 **Gemini Image (Proxy)** 节点使用此 key。
 
 ## 节点
 - **Nano Banana (Google Gemini Image)**（`GeminiImageNanoBanana`）：文生图/可选参考图。模型：`gemini-2.5-flash-image`、`gemini-2.5-flash-image-preview`。种子 0–0x7FFFFFFF（负数/留空为随机）。`aspect_ratio` 含 `auto`。`response_modalities` 可选 仅图 / 图+文。
 - **Nano Banana Pro (Google Gemini Image)**（`GeminiImageNanoBananaPro`）：同上，额外分辨率下拉（1K/2K/4K）。模型：`gemini-3-pro-image-preview`。
+- **Gemini Image (Proxy)**（`GeminiImageProxy`）：通过**生成式 API 代理服务**调用 `generateImage` 接口。使用独立的代理 API Key（见上文）。支持 prompt、可选参考图、`aspect_ratio`（含 `auto`，无图时默认 16:9）、`image_size`（1K/2K/4K）、`response_modalities`、`auto_fallback`。默认超时 3 分钟，可通过 `GEMINI_PROXY_TIMEOUT` 调整。
 
 ### 说明
-- `aspect_ratio` 由公开 API 处理，`auto` 让服务自行决定。
-- 种子按 32 位限制（超出会被截断）。
+- `aspect_ratio` 由公开 API 处理；`auto` 时：有参考图则按首图比例取最接近的允许比例，无图时由服务或默认（Proxy 为 16:9）决定。
+- 种子按 32 位限制（超出会被截断）；Proxy 节点无种子参数。
 - `response_modalities` 选 `IMAGE` 时文本输出为空。
 
 ## 高级配置
@@ -30,11 +36,15 @@ pip install -r custom_nodes/gemini-api-comfyui/requirements.txt
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `GEMINI_API_TIMEOUT` | `600` | API调用超时时间（秒，默认10分钟）<br/>**重要**：4K Pro模型可能需要5-10分钟 |
+| `GEMINI_API_TIMEOUT` | `600` | 官方 API 调用超时时间（秒，默认10分钟）<br/>**重要**：4K Pro模型可能需要5-10分钟 |
 | `GEMINI_MAX_RETRIES` | `2` | 失败后的重试次数<br/>**总尝试次数 = 1（初始）+ 2（重试）= 3次** |
 | `GEMINI_RETRY_DELAY` | `5.0` | 重试之间的延迟（秒） |
 | `GEMINI_CB_THRESHOLD` | `5` | 断路器阈值：连续失败多少次后断路 |
 | `GEMINI_CB_TIMEOUT` | `300` | 断路器超时：断路后等待多少秒再尝试恢复（默认5分钟） |
+| **代理节点** | | |
+| `GEMINI_PROXY_BASE_URL` | `http://175.27.169.180` | 生成式 API 代理服务根地址（仅 Proxy 节点） |
+| `GEMINI_PROXY_TIMEOUT` | `180` | 代理 API 请求超时（秒，默认 3 分钟） |
+| `GEMINI_PROXY_API_KEY` | — | 代理服务 API Key（也可用 `gemini_proxy_api_key.txt`） |
 
 #### 预期生成时间
 

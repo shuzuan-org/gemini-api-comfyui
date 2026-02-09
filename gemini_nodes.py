@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-import os
+import base64
+import json
 import math
 import logging
+import os
 import time
 import threading
+import urllib.error
+import urllib.request
 from io import BytesIO
 from pathlib import Path
-from typing import List
+from typing import Any, List
 from datetime import datetime, timedelta
 
 import google.genai as genai
@@ -30,6 +34,10 @@ if not logger.handlers:
 # Path for local key fallback
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "gemini_api_key.txt"
+# 代理 API 配置（生成式 API 代理服务，与 GEMINI_API_KEY 相互独立）
+PROXY_BASE_URL = os.getenv("GEMINI_PROXY_BASE_URL", "http://175.27.169.180").rstrip("/")
+PROXY_API_TIMEOUT = int(os.getenv("GEMINI_PROXY_TIMEOUT", "180"))  # 默认 3 分钟
+PROXY_CONFIG_FILE = BASE_DIR / "gemini_proxy_api_key.txt"
 SYSTEM_PROMPT = (
     "You are an expert image-generation engine. You must ALWAYS produce an image. "
     "Interpret all user input - regardless of format, intent, or abstraction - as literal visual directives for image composition. "
@@ -119,7 +127,7 @@ class CircuitBreaker:
 _circuit_breaker = CircuitBreaker()
 
 def _load_api_key() -> str:
-    """Lookup API key from env or gemini_api_key.txt."""
+    """Lookup API key from env or gemini_api_key.txt（用于官方 Gemini 节点）."""
     api_key = os.getenv("GEMINI_API_KEY")
     if api_key:
         return api_key.strip()
@@ -128,6 +136,20 @@ def _load_api_key() -> str:
         if key:
             return key
     raise RuntimeError("Gemini API key not found. Set GEMINI_API_KEY or create gemini_api_key.txt.")
+
+
+def _load_proxy_api_key() -> str:
+    """Lookup 代理 API key from env or gemini_proxy_api_key.txt（仅用于 Proxy 节点，与 GEMINI_API_KEY 无关）."""
+    api_key = os.getenv("GEMINI_PROXY_API_KEY")
+    if api_key:
+        return api_key.strip()
+    if PROXY_CONFIG_FILE.exists():
+        key = PROXY_CONFIG_FILE.read_text(encoding="utf-8").strip()
+        if key:
+            return key
+    raise RuntimeError(
+        "代理 API key 未配置。请设置环境变量 GEMINI_PROXY_API_KEY 或创建 gemini_proxy_api_key.txt。"
+    )
 
 
 def _tensor_to_png_bytes(image: torch.Tensor) -> bytes:
@@ -241,6 +263,73 @@ def _response_parts_to_tensors_and_text(response) -> tuple[torch.Tensor, str]:
     if not images:
         raise RuntimeError("Gemini API returned no images.")
     return torch.stack(images, dim=0), "\n".join(texts)
+
+
+def _proxy_response_to_tensors_and_text(data: dict) -> tuple[torch.Tensor, str]:
+    """从代理 API 返回的 JSON 中解析图片张量与文本。"""
+    images: list[torch.Tensor] = []
+    texts: list[str] = []
+    candidates = data.get("candidates") or []
+    for cand in candidates:
+        content = cand.get("content") or {}
+        for part in content.get("parts") or []:
+            inline = part.get("inline_data") or part.get("inlineData")
+            if inline:
+                raw = inline.get("data")
+                if raw:
+                    try:
+                        img_bytes = base64.b64decode(raw)
+                    except Exception as e:
+                        logger.warning("代理返回的 base64 解码失败: %s", e)
+                        continue
+                    buffer = None
+                    pil = None
+                    try:
+                        buffer = BytesIO(img_bytes)
+                        pil = PILImage.open(buffer).convert("RGB")
+                        arr = np.asarray(pil, dtype=np.float32) / 255.0
+                        images.append(torch.from_numpy(arr))
+                    finally:
+                        if pil:
+                            pil.close()
+                        if buffer:
+                            buffer.close()
+            if part.get("text"):
+                texts.append(part["text"])
+    if not images:
+        raise RuntimeError("代理 API 未返回任何图片。")
+    return torch.stack(images, dim=0), "\n".join(texts)
+
+
+def _call_proxy_generate_image(
+    api_key: str,
+    model: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    """调用代理服务的 generateImage 接口。"""
+    url = f"{PROXY_BASE_URL}/api/v1/models/{model}:generateImage"
+    payload = json.dumps(body).encode("utf-8")
+    auth_header = api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "accept": "application/json",
+            "Authorization": auth_header,
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=PROXY_API_TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        logger.error("代理 API HTTP 错误 %s: %s", e.code, body)
+        raise RuntimeError(f"代理 API 请求失败 ({e.code}): {body}") from e
+    except urllib.error.URLError as e:
+        logger.error("代理 API 请求异常: %s", e)
+        raise RuntimeError(f"代理 API 请求异常: {e}") from e
 
 
 def _call_gemini_api_with_retry(client, model: str, contents, config) -> any:
@@ -585,12 +674,106 @@ class GeminiImagePro(io.ComfyNode):
         return io.NodeOutput(images_out, text_out)
 
 
+class GeminiImageProxy(io.ComfyNode):
+    """通过生成式 API 代理服务调用 Gemini 图像生成（generateImage 接口）。"""
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="GeminiImageProxy",
+            display_name="Nano Banana Pro (Shuzuan Proxy)",
+            category="Gemini",
+            inputs=[
+                io.String.Input("prompt", multiline=True, default=""),
+                io.String.Input(
+                    "model",
+                    default="gemini-3-pro-image-preview",
+                ),
+                io.Combo.Input(
+                    "aspect_ratio",
+                    options=[r for r in ASPECT_RATIOS if r != "auto"] + ["auto"],
+                    default="16:9",
+                    optional=True,
+                ),
+                io.Combo.Input(
+                    "image_size",
+                    options=["1K", "2K", "4K"],
+                    default="1K",
+                    optional=True,
+                ),
+                io.Combo.Input(
+                    "response_modalities",
+                    options=["IMAGE+TEXT", "IMAGE"],
+                    default="IMAGE+TEXT",
+                    optional=True,
+                ),
+                io.Combo.Input(
+                    "auto_fallback",
+                    options=["true", "false"],
+                    default="true",
+                ),
+                io.Image.Input("images", optional=True),
+            ],
+            outputs=[io.Image.Output(), io.String.Output()],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        prompt: str,
+        model: str,
+        aspect_ratio: str,
+        image_size: str,
+        response_modalities: str,
+        auto_fallback: bool,
+        images: torch.Tensor | None,
+    ) -> io.NodeOutput:
+        api_key = _load_proxy_api_key()
+        model = (model or "gemini-3-pro-image-preview").strip()
+        # auto：有参考图时按首图宽高取最接近的允许比例，无图时用 16:9
+        ratio_hint = _aspect_ratio_hint(aspect_ratio, images)
+        ratio = (ratio_hint or "16:9").strip()
+        size = (image_size or "1K").strip()
+        modalities = (response_modalities or "IMAGE+TEXT").strip()
+
+        parts: list[dict[str, Any]] = [{"text": prompt or ""}]
+        if images is not None:
+            png_list = _tensor_to_png_bytes_list(images)
+            for png_bytes in png_list:
+                parts.append({
+                    "inline_data": {
+                        "mime_type": "image/png",
+                        "data": base64.b64encode(png_bytes).decode("ascii"),
+                    }
+                })
+
+        body: dict[str, Any] = {
+            "auto_fallback": (auto_fallback or "true").strip().lower() == "true",
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"] if modalities != "IMAGE" else ["IMAGE"],
+                "imageConfig": {
+                    "aspectRatio": ratio,
+                    "imageSize": size,
+                },
+            },
+        }
+
+        logger.info("调用代理 API: %s, 模型: %s", PROXY_BASE_URL, model)
+        resp = _call_proxy_generate_image(api_key=api_key, model=model, body=body)
+        images_out, text_out = _proxy_response_to_tensors_and_text(resp)
+        if modalities == "IMAGE":
+            text_out = ""
+        return io.NodeOutput(images_out, text_out)
+
+
 class GeminiExtension(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
         return [
             GeminiImage,
             GeminiImagePro,
+            GeminiImageProxy,
         ]
 
 
