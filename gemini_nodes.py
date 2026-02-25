@@ -35,7 +35,7 @@ if not logger.handlers:
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "gemini_api_key.txt"
 # 代理 API 配置（生成式 API 代理服务，与 GEMINI_API_KEY 相互独立）
-PROXY_BASE_URL = os.getenv("GEMINI_PROXY_BASE_URL", "http://175.27.169.180").rstrip("/")
+PROXY_BASE_URL = os.getenv("GEMINI_PROXY_BASE_URL", "https://gate.origintask.cn").rstrip("/")
 PROXY_API_TIMEOUT = int(os.getenv("GEMINI_PROXY_TIMEOUT", "180"))  # 默认 3 分钟
 PROXY_CONFIG_FILE = BASE_DIR / "gemini_proxy_api_key.txt"
 SYSTEM_PROMPT = (
