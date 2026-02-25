@@ -736,7 +736,7 @@ class GeminiImageProxy(io.ComfyNode):
         size = (image_size or "1K").strip()
         modalities = (response_modalities or "IMAGE+TEXT").strip()
 
-        parts: list[dict[str, Any]] = [{"text": prompt or ""}]
+        parts: list[dict[str, Any]] = [{"text": prompt or "按照图片内容发挥想象力，生成一张图片"}]
         if images is not None:
             png_list = _tensor_to_png_bytes_list(images)
             for png_bytes in png_list:
