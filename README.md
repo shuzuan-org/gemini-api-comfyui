@@ -42,7 +42,7 @@ pip install -r custom_nodes/gemini-api-comfyui/requirements.txt
 | `GEMINI_CB_THRESHOLD` | `5` | 断路器阈值：连续失败多少次后断路 |
 | `GEMINI_CB_TIMEOUT` | `300` | 断路器超时：断路后等待多少秒再尝试恢复（默认5分钟） |
 | **代理节点** | | |
-| `GEMINI_PROXY_BASE_URL` | `http://175.27.169.180` | 生成式 API 代理服务根地址（仅 Proxy 节点） |
+| `GEMINI_PROXY_BASE_URL` | `https://gate.origintask.cn` | 生成式 API 代理服务根地址（仅 Proxy 节点） |
 | `GEMINI_PROXY_TIMEOUT` | `180` | 代理 API 请求超时（秒，默认 3 分钟） |
 | `GEMINI_PROXY_API_KEY` | — | 代理服务 API Key（也可用 `gemini_proxy_api_key.txt`） |
 
